@@ -1,0 +1,130 @@
+#!/usr/bin/env perl6
+# -*- Mode: Perl6; indent-tabs-mode: nil; coding: utf-8 -*-
+# vim: set et ts=4 sw=4:
+
+use v6;
+
+#use FreeDE::Log;
+
+my regex some-digit { \d+ }
+my regex description { .+ } # XXX
+my regex device-id { <xdigit>+ \: <xdigit>+ }
+my regex usb-info-row {
+# ex)
+# Bus 002 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+    Bus \s+ <bus-number=some-digit> \s+ Device \s+ <device-number=some-digit> \:
+        \s+ ID \s+ <device-id> \s+ <description> $
+}
+
+sub USAGE {
+    say "hid-power-control.pl6 [on|auto|toggle]"
+}
+
+sub get-hid-name-list () returns List {
+    return ( 'keychron', 'unifying receiver' );
+}
+
+sub get-hid-device-list ( Str $source-lines ) {
+    my $device-name-union = get-hid-name-list().join('|');
+    $device-name-union ~~ s:g/\s/ \\s /;
+    my @result-list;
+
+    for $source-lines.split( "\n" ) -> $line {
+        if my $res = $line ~~ /<usb-info-row>/ {
+            next unless $res{'usb-info-row'}{'description'}
+            ~~ m:i/<$device-name-union>/;
+
+            my ( $id, $name ) =
+            $res{'usb-info-row'}{ qw<device-id description> };
+            @result-list.push( :{ 'device-id'     => $id.Str,
+                                  'device-name'   => $name.Str } );
+        }
+    }
+
+    return @result-list;
+}
+
+sub get-power-control-path (
+    Str $device-id,
+    Str $device-directory = '/sys/bus/hid/devices',
+    Str $path-format = "/sys/bus/usb/devices/\{NUM\}/power/control" ) {
+
+    if $device-directory.IO.d.not {
+        warn "cannot find device directory: $device-directory";
+        return False;
+    }
+
+    chdir( $device-directory );
+    my $device-regex = $device-id.uc;
+    # follow symbolic link to find proper power control path(or BUS??)
+    my @hids = dir( test => /$device-regex/ );
+    if @hids.elems < 1 {
+        warn "this doesn't happen normally: could not find device($device-id) "
+        ~ "from directory($device-directory)";
+        return False;
+    }
+
+    # we only need to check first one from @hids
+    my $device-full-path = @hids[0].resolve: :completely;
+#    $device-full-path.say;
+    my $bus-full-path = $device-full-path.parent.parent.basename;
+
+    S/\{NUM\}/$bus-full-path/ with $path-format;
+}
+
+sub write-value-on-path (
+    Str $device-id,
+    Str $status = 'auto' ) returns Bool {
+
+    my $path = get-power-control-path( $device-id );
+    try {
+        my $io = $path.IO.open: :update;
+        say ">>> echo $status > $path";
+        my $proc = run 'echo', $status, :out( $io );
+        $io.close;
+
+        given $proc.exitcode {
+            when 0 {  return True; }
+            default { return False; }
+        }
+        CATCH {
+            default {
+                warn ~.Str ~"\n:: forget to use `sudo'?";
+                return False;
+            }
+        }
+    }
+}
+
+sub MAIN ( Str $command!,
+           Bool :$verbose,
+           Str  :$log-level is copy = 'DEBUG') {
+
+    # find the way to check existence value of (which usb)
+    given $command {
+        when 'on'|'auto' {
+            my $usb-info = ~q:x{lsusb};
+            my @hid-list = get-hid-device-list( $usb-info );
+            if @hid-list.elems < 1 {
+                say "No USB Input Device found";
+                exit 1;
+            }
+            say "Total {@hid-list.elems} USB Input Device found.";
+            say "Turning " ~ ( $command eq 'on' ?? 'OFF' !! 'ON' ) ~ " autotune for Input Device(s).";
+            for @hid-list -> $hid {
+                say ":: " ~ $hid{'device-name'} ~ ": ",
+                ( write-value-on-path(
+                        $hid{'device-id'},
+                        $command ) ) ?? "... done" !! "... failed";
+            }
+        }
+        when 'toggle' {
+            say 'Not implemented';
+            return 0;
+        }
+        default {
+            USAGE();
+            exit 1;
+        }
+    }
+}

@@ -17,7 +17,14 @@ my regex usb-info-row {
 }
 
 sub USAGE {
-    say "hid-power-control.pl6 [on|auto|toggle]"
+    say q:to/END/;
+sudo hid-power-control.pl6 [on|auto|toggle]  # note: you need super user privilege
+
+COMMANDS:
+on:     turn OFF auto tune for the devices
+auto:   turn ON auto tune for the devices
+toggle: <not implemented yet>
+END
 }
 
 sub get-hid-name-list () returns List {
@@ -25,14 +32,20 @@ sub get-hid-name-list () returns List {
 }
 
 sub get-hid-device-list ( Str $source-lines ) {
-    my $device-name-union = get-hid-name-list().join('|');
-    $device-name-union ~~ s:g/\s/ \\s /;
+#    my $device-name-union = get-hid-name-list().join('|');
+#    $device-name-union ~~ s:g/\s/ \\s /;
     my @result-list;
 
     for $source-lines.split( "\n" ) -> $line {
+        my $found = False;
         if my $res = $line ~~ /<usb-info-row>/ {
-            next unless $res{'usb-info-row'}{'description'}
-            ~~ m:i/<$device-name-union>/;
+            for get-hid-name-list() -> $needle {
+                if $res{'usb-info-row'}{'description'}.contains( $needle, :i ) {
+                    $found = True;
+                    last;
+                }
+            }
+            next unless $found;
 
             my ( $id, $name ) =
             $res{'usb-info-row'}{ qw<device-id description> };
